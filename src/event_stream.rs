@@ -138,18 +138,20 @@ pub struct EventStream<S> {
     builder: EventBuilder,
     state: EventStreamState,
     last_event_id: String,
+    parse_line: bool
 }
 }
 
 impl<S> EventStream<S> {
     /// Initialize the EventStream with a Stream
-    pub fn new(stream: S) -> Self {
+    pub fn new(stream: S, parse_line: bool) -> Self {
         Self {
             stream: Utf8Stream::new(stream),
             buffer: String::new(),
             builder: EventBuilder::default(),
             state: EventStreamState::NotStarted,
             last_event_id: String::new(),
+            parse_line,
         }
     }
 
@@ -210,12 +212,18 @@ impl<E> std::error::Error for EventStreamError<E> where E: fmt::Display + fmt::D
 fn parse_event<E>(
     buffer: &mut String,
     builder: &mut EventBuilder,
+    parse_line: bool,
 ) -> Result<Option<Event>, EventStreamError<E>> {
     if buffer.is_empty() {
         return Ok(None);
     }
     loop {
-        match line(buffer.as_ref()) {
+        let parse_result = if parse_line {
+            line(buffer.as_ref())
+        } else {
+            Ok(("", RawEventLine::Field("data", Some(buffer.as_str()))))
+        };
+        match parse_result {
             Ok((rem, next_line)) => {
                 builder.add(next_line);
                 let consumed = buffer.len() - rem.len();
@@ -242,8 +250,7 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-
-        match parse_event(this.buffer, this.builder) {
+        match parse_event(this.buffer, this.builder, this.parse_line.clone()) {
             Ok(Some(event)) => {
                 *this.last_event_id = event.id.clone();
                 return Poll::Ready(Some(Ok(event)));
@@ -275,7 +282,7 @@ where
                     };
                     this.buffer.push_str(slice);
 
-                    match parse_event(this.buffer, this.builder) {
+                    match parse_event(this.buffer, this.builder, this.parse_line.clone()) {
                         Ok(Some(event)) => {
                             *this.last_event_id = event.id.clone();
                             return Poll::Ready(Some(Ok(event)));
@@ -303,9 +310,10 @@ mod tests {
     #[tokio::test]
     async fn valid_data_fields() {
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "data: Hello, world!\n\n"
-            )]))
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>("data: Hello, world!\n\n")]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -316,10 +324,13 @@ mod tests {
             }]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![
-                Ok::<_, ()>("data: Hello,"),
-                Ok::<_, ()>(" world!\n\n")
-            ]))
+            EventStream::new(
+                futures::stream::iter(vec![
+                    Ok::<_, ()>("data: Hello,"),
+                    Ok::<_, ()>(" world!\n\n")
+                ]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -330,11 +341,14 @@ mod tests {
             }]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![
-                Ok::<_, ()>("data: Hello,"),
-                Ok::<_, ()>(""),
-                Ok::<_, ()>(" world!\n\n")
-            ]))
+            EventStream::new(
+                futures::stream::iter(vec![
+                    Ok::<_, ()>("data: Hello,"),
+                    Ok::<_, ()>(""),
+                    Ok::<_, ()>(" world!\n\n")
+                ]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -345,18 +359,20 @@ mod tests {
             }]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "data: Hello, world!\n"
-            )]))
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>("data: Hello, world!\n")]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
             vec![]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "data: Hello,\ndata: world!\n\n"
-            )]))
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>("data: Hello,\ndata: world!\n\n")]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -367,9 +383,10 @@ mod tests {
             }]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "data: Hello,\n\ndata: world!\n\n"
-            )]))
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>("data: Hello,\n\ndata: world!\n\n")]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -391,8 +408,9 @@ mod tests {
     #[tokio::test]
     async fn spec_examples() {
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "data: This is the first message.
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>(
+                    "data: This is the first message.
 
 data: This is the second message, it
 data: has two lines.
@@ -400,7 +418,9 @@ data: has two lines.
 data: This is the third message.
 
 "
-            )]))
+                )]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -423,8 +443,9 @@ data: This is the third message.
             ]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "event: add
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>(
+                    "event: add
 data: 73857293
 
 event: remove
@@ -434,7 +455,9 @@ event: add
 data: 113411
 
 "
-            )]))
+                )]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -457,13 +480,16 @@ data: 113411
             ]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "data: YHOO
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>(
+                    "data: YHOO
 data: +2
 data: 10
 
 "
-            )]))
+                )]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -474,8 +500,9 @@ data: 10
             },]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                ": test stream
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>(
+                    ": test stream
 
 data: first event
 id: 1
@@ -486,7 +513,9 @@ id
 data:  third event
 
 "
-            )]))
+                )]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -510,15 +539,18 @@ data:  third event
             ]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "data
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>(
+                    "data
 
 data
 data
 
 data:
 "
-            )]))
+                )]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),
@@ -536,13 +568,16 @@ data:
             ]
         );
         assert_eq!(
-            EventStream::new(futures::stream::iter(vec![Ok::<_, ()>(
-                "data:test
+            EventStream::new(
+                futures::stream::iter(vec![Ok::<_, ()>(
+                    "data:test
 
 data: test
 
 "
-            )]))
+                )]),
+                true
+            )
             .try_collect::<Vec<_>>()
             .await
             .unwrap(),

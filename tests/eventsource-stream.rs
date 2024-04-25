@@ -29,7 +29,7 @@ data:ignored
         )
         .unwrap();
     let response = Response::from(response);
-    let mut stream = response.bytes_stream().eventsource();
+    let mut stream = response.bytes_stream().eventsource(Some(true));
 
     let event = stream.next().await.unwrap().unwrap();
     assert_eq!("my-event", event.event);
