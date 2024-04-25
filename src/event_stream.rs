@@ -218,6 +218,7 @@ fn parse_event<E>(
         return Ok(None);
     }
     loop {
+        println!("buffer: {buffer}");
         if add_data {
             buffer.insert_str(0, "data: ")
         }
