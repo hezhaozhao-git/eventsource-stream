@@ -219,7 +219,7 @@ fn parse_event<E>(
     }
     loop {
         println!("buffer: {buffer}");
-        if add_data && !buffer.starts_with("data: "){
+        if add_data && !buffer.starts_with("data: ") && !buffer.is_empty(){
             buffer.insert_str(0, "data: ")
         }
         match line(buffer.as_ref()) {
