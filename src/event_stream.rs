@@ -138,20 +138,20 @@ pub struct EventStream<S> {
     builder: EventBuilder,
     state: EventStreamState,
     last_event_id: String,
-    parse_line: bool
+    add_data: bool
 }
 }
 
 impl<S> EventStream<S> {
     /// Initialize the EventStream with a Stream
-    pub fn new(stream: S, parse_line: bool) -> Self {
+    pub fn new(stream: S, add_data: bool) -> Self {
         Self {
             stream: Utf8Stream::new(stream),
             buffer: String::new(),
             builder: EventBuilder::default(),
             state: EventStreamState::NotStarted,
             last_event_id: String::new(),
-            parse_line,
+            add_data,
         }
     }
 
@@ -212,18 +212,16 @@ impl<E> std::error::Error for EventStreamError<E> where E: fmt::Display + fmt::D
 fn parse_event<E>(
     buffer: &mut String,
     builder: &mut EventBuilder,
-    parse_line: bool,
+    add_data: bool,
 ) -> Result<Option<Event>, EventStreamError<E>> {
     if buffer.is_empty() {
         return Ok(None);
     }
     loop {
-        let parse_result = if parse_line {
-            line(buffer.as_ref())
-        } else {
-            Ok(("", RawEventLine::Field("data", Some(buffer.as_str()))))
-        };
-        match parse_result {
+        if add_data {
+            buffer.insert_str(0, "data: ")
+        }
+        match line(buffer.as_ref()) {
             Ok((rem, next_line)) => {
                 builder.add(next_line);
                 let consumed = buffer.len() - rem.len();
@@ -250,7 +248,7 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-        match parse_event(this.buffer, this.builder, this.parse_line.clone()) {
+        match parse_event(this.buffer, this.builder, this.add_data.clone()) {
             Ok(Some(event)) => {
                 *this.last_event_id = event.id.clone();
                 return Poll::Ready(Some(Ok(event)));
@@ -282,7 +280,7 @@ where
                     };
                     this.buffer.push_str(slice);
 
-                    match parse_event(this.buffer, this.builder, this.parse_line.clone()) {
+                    match parse_event(this.buffer, this.builder, this.add_data.clone()) {
                         Ok(Some(event)) => {
                             *this.last_event_id = event.id.clone();
                             return Poll::Ready(Some(Ok(event)));
