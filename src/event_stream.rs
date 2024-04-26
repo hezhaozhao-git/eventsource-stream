@@ -218,7 +218,6 @@ fn parse_event<E>(
         return Ok(None);
     }
     loop {
-        println!("buffer: {buffer}");
         if add_data && !buffer.starts_with("data: ") && !buffer.trim().is_empty(){
             buffer.insert_str(0, "data: ");
             buffer.insert_str(buffer.len(), "\n");
